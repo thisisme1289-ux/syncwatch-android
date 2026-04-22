@@ -8,3 +8,7 @@ app/build/
 captures/
 .externalNativeBuild/
 .cxx/
+venv/
+graphify-out/
+__pycache__/
+*.pyc
