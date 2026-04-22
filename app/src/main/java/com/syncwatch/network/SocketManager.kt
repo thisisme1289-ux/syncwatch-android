@@ -19,11 +19,11 @@ object SocketManager {
     private val gson = Gson()
     private lateinit var socket: Socket
 
-    // replay=1 so new collectors instantly receive the current connection state
+    // replay=1 → new collectors immediately receive current connection state
     private val _connected = MutableSharedFlow<Boolean>(replay = 1)
     val connected = _connected.asSharedFlow()
 
-    // All inbound event flows — replay=0, events are consumed once
+    // All inbound event flows — replay=0, each event consumed once
     private val _roomJoined      = MutableSharedFlow<RoomJoinedPayload>(replay = 0)
     private val _roomError       = MutableSharedFlow<String>(replay = 0)
     private val _userJoined      = MutableSharedFlow<UserInfo>(replay = 0)
@@ -66,38 +66,38 @@ object SocketManager {
         Log.d(TAG, "init() SERVER_URL=${BuildConfig.SERVER_URL}")
 
         val opts = IO.Options().apply {
-            // ─────────────────────────────────────────────────────────────────────
-            // FIX: Render's reverse-proxy REQUIRES polling for the initial
-            // Socket.IO handshake before it permits a WebSocket upgrade.
-            // "websocket"-only silently fails — EVENT_CONNECT never fires.
-            // ─────────────────────────────────────────────────────────────────────
-            transports = arrayOf("polling", "websocket")
+            // ─────────────────────────────────────────────────────────────────
+            // CRITICAL: server/index.js has transports: ['websocket'] only.
+            // The server REJECTS polling connections.
+            // Android must use websocket-only to match.
+            //
+            // Previous Session 2 "fix" of arrayOf("polling","websocket") was
+            // WRONG — it caused polling to be tried first, server rejected it
+            // with CONNECT_ERROR, and reconnection looped until 60 s timeout.
+            // ─────────────────────────────────────────────────────────────────
+            transports = arrayOf("websocket")
 
             reconnection         = true
             reconnectionAttempts = Integer.MAX_VALUE
             reconnectionDelay    = 2000L
             reconnectionDelayMax = 10000L
-
-            // 20 s per individual connection attempt (default); user-visible
-            // timeout is controlled separately in HomeViewModel (60 s).
-            timeout = 20000L
+            timeout              = 20000L
         }
 
         socket = IO.socket(URI.create(BuildConfig.SERVER_URL), opts)
         registerListeners()
-        Log.d(TAG, "init() socket created OK")
+        Log.d(TAG, "init() socket created, listeners registered")
     }
 
     // ── Connection lifecycle ──────────────────────────────────────────────────
 
     fun connect() {
         if (socket.connected()) {
-            Log.d(TAG, "connect() already connected sid=${socket.id()}")
-            // replay=1 ensures any new collector gets true immediately
+            Log.d(TAG, "connect() already connected sid=${socket.id()} — re-emitting true")
             _connected.tryEmit(true)
             return
         }
-        Log.d(TAG, "connect() → socket.connect()")
+        Log.d(TAG, "connect() calling socket.connect()")
         socket.connect()
     }
 
@@ -108,40 +108,20 @@ object SocketManager {
 
     val isConnected: Boolean get() = socket.connected()
 
-    // ── Outbound emit helpers ─────────────────────────────────────────────────
+    // ── Outbound helpers ──────────────────────────────────────────────────────
 
-    fun joinRoom(payload: JoinRoomPayload) =
-        emit("join_room", payload)
-
-    fun play(roomId: String, timestamp: Double) =
-        emit("playback_play", PlaybackEventPayload(roomId, timestamp))
-
-    fun pause(roomId: String, timestamp: Double) =
-        emit("playback_pause", PlaybackEventPayload(roomId, timestamp))
-
-    fun seek(roomId: String, timestamp: Double) =
-        emit("playback_seek", PlaybackEventPayload(roomId, timestamp))
-
-    fun setRate(roomId: String, rate: Float) =
-        emit("playback_rate", PlaybackRatePayload(roomId, rate))
-
-    fun requestSync(roomId: String) =
-        emit("request_sync", mapOf("roomId" to roomId))
-
-    fun sendChat(roomId: String, text: String) =
-        emit("chat_message", ChatMessagePayload(roomId, text))
-
-    fun updateSettings(roomId: String, settings: RoomSettings) =
-        emit("settings_update", SettingsUpdatePayload(roomId, settings))
-
-    fun transferHost(roomId: String, targetSocketId: String) =
-        emit("transfer_host", TransferHostPayload(roomId, targetSocketId))
-
-    fun sendSsOffer(roomId: String, offer: String) =
-        emit("ss_offer", mapOf("roomId" to roomId, "offer" to offer))
-
-    fun sendSsAnswer(roomId: String, answer: String) =
-        emit("ss_answer", mapOf("roomId" to roomId, "answer" to answer))
+    fun joinRoom(payload: JoinRoomPayload)                      = emit("join_room",        payload)
+    fun play(roomId: String, timestamp: Double)                 = emit("playback_play",    PlaybackEventPayload(roomId, timestamp))
+    fun pause(roomId: String, timestamp: Double)                = emit("playback_pause",   PlaybackEventPayload(roomId, timestamp))
+    fun seek(roomId: String, timestamp: Double)                 = emit("playback_seek",    PlaybackEventPayload(roomId, timestamp))
+    fun setRate(roomId: String, rate: Float)                    = emit("playback_rate",    PlaybackRatePayload(roomId, rate))
+    fun requestSync(roomId: String)                             = emit("request_sync",     mapOf("roomId" to roomId))
+    fun sendChat(roomId: String, text: String)                  = emit("chat_message",     ChatMessagePayload(roomId, text))
+    fun updateSettings(roomId: String, settings: RoomSettings)  = emit("settings_update",  SettingsUpdatePayload(roomId, settings))
+    fun transferHost(roomId: String, targetSocketId: String)    = emit("transfer_host",    TransferHostPayload(roomId, targetSocketId))
+    fun sendSsOffer(roomId: String, offer: String)              = emit("ss_offer",         mapOf("roomId" to roomId, "offer" to offer))
+    fun sendSsAnswer(roomId: String, answer: String)            = emit("ss_answer",        mapOf("roomId" to roomId, "answer" to answer))
+    fun sendSsStopped(roomId: String)                           = emit("ss_stopped",       mapOf("roomId" to roomId))
 
     fun sendSsIce(roomId: String, candidate: String, to: String? = null) {
         val map = mutableMapOf("roomId" to roomId, "candidate" to candidate)
@@ -149,18 +129,15 @@ object SocketManager {
         emit("ss_ice", map)
     }
 
-    fun sendSsStopped(roomId: String) =
-        emit("ss_stopped", mapOf("roomId" to roomId))
-
     // ── Internal emit ─────────────────────────────────────────────────────────
 
     private fun emit(event: String, payload: Any) {
         val json = JSONObject(gson.toJson(payload))
-        Log.d(TAG, "→ emit '$event' payload=$json")
+        Log.d(TAG, "→ emit '$event' $json")
         socket.emit(event, json)
     }
 
-    // ── Socket listeners ──────────────────────────────────────────────────────
+    // ── Listeners ─────────────────────────────────────────────────────────────
 
     private fun registerListeners() {
 
@@ -175,15 +152,17 @@ object SocketManager {
         }
 
         socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
+            // Log the full error so we can diagnose via adb logcat
             Log.e(TAG, "EVENT_CONNECT_ERROR: ${args.firstOrNull()}")
             _connected.tryEmit(false)
         }
 
-        // Room
+        // ── Room ──────────────────────────────────────────────────────────────
+
         socket.on("room_joined") { args ->
             Log.d(TAG, "← room_joined raw=${args.firstOrNull()}")
             parse<RoomJoinedPayload>(args)?.let { _roomJoined.tryEmit(it) }
-                ?: Log.e(TAG, "room_joined parse FAILED — check field names vs server")
+                ?: Log.e(TAG, "room_joined PARSE FAILED — raw was: ${args.firstOrNull()}")
         }
 
         socket.on("room_error") { args ->
@@ -192,7 +171,8 @@ object SocketManager {
             _roomError.tryEmit(json.optString("message", "Server error"))
         }
 
-        // Users
+        // ── Users ─────────────────────────────────────────────────────────────
+
         socket.on("user_joined") { args ->
             Log.d(TAG, "← user_joined")
             parse<UserInfo>(args)?.let { _userJoined.tryEmit(it) }
@@ -203,7 +183,8 @@ object SocketManager {
             parse<UserInfo>(args)?.let { _userLeft.tryEmit(it) }
         }
 
-        // Playback
+        // ── Playback ──────────────────────────────────────────────────────────
+
         socket.on("playback_play")  { args -> parsePlaybackEvent(args)?.let { _playbackPlay.tryEmit(it) } }
         socket.on("playback_pause") { args -> parsePlaybackEvent(args)?.let { _playbackPause.tryEmit(it) } }
         socket.on("playback_seek")  { args -> parsePlaybackEvent(args)?.let { _playbackSeek.tryEmit(it) } }
@@ -217,18 +198,20 @@ object SocketManager {
 
         socket.on("sync_state") { args ->
             val json = args.firstOrNull() as? JSONObject ?: return@on
+            // Server sends: { playback: { timestamp, state, rate, ... } }
             val pb = json.optJSONObject("playback") ?: json
             _syncState.tryEmit(
                 PlaybackState(
                     timestamp = pb.optDouble("timestamp", 0.0),
-                    isPlaying = pb.optBoolean("isPlaying", false),
+                    isPlaying = pb.optString("state") == "playing",
                     rate      = pb.optDouble("rate", 1.0).toFloat(),
                     serverTs  = System.currentTimeMillis()
                 )
             )
         }
 
-        // Chat & settings
+        // ── Chat & settings ───────────────────────────────────────────────────
+
         socket.on("chat_message") { args ->
             parse<ChatMessage>(args)?.let { _chatMessage.tryEmit(it) }
         }
@@ -244,13 +227,15 @@ object SocketManager {
             parse<HostTransferredPayload>(args)?.let { _hostTransferred.tryEmit(it) }
         }
 
-        // Media upload
+        // ── Media ─────────────────────────────────────────────────────────────
+
         socket.on("media_ready") { args ->
             Log.d(TAG, "← media_ready")
             parse<MediaInfo>(args)?.let { _mediaReady.tryEmit(it) }
         }
 
-        // Screen-share signalling
+        // ── Screen share ──────────────────────────────────────────────────────
+
         socket.on("ss_offer")   { args -> parse<SdpPayload>(args)?.let          { _ssOffer.tryEmit(it) } }
         socket.on("ss_answer")  { args -> parse<SdpAnswerPayload>(args)?.let    { _ssAnswer.tryEmit(it) } }
         socket.on("ss_ice")     { args -> parse<IceCandidatePayload>(args)?.let { _ssIce.tryEmit(it) } }
@@ -263,7 +248,7 @@ object SocketManager {
         val json = args.firstOrNull() as? JSONObject ?: return null
         gson.fromJson(json.toString(), T::class.java)
     }.getOrElse {
-        Log.e(TAG, "parse<${T::class.simpleName}> exception: ${it.message}")
+        Log.e(TAG, "parse<${T::class.simpleName}> failed: ${it.message}")
         null
     }
 
@@ -279,7 +264,7 @@ object SocketManager {
     }
 }
 
-// ── Extra payload types (only needed inside SocketManager) ────────────────────
+// ── Extra payload types ────────────────────────────────────────────────────────
 
 data class HostTransferredPayload(val newHostId: String, val newHostNickname: String)
 data class SdpPayload(val offer: String)
