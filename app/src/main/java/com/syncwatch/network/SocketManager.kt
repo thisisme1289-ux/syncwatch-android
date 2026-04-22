@@ -7,11 +7,8 @@ import com.syncwatch.BuildConfig
 import com.syncwatch.model.*
 import io.socket.client.IO
 import io.socket.client.Socket
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.callbackFlow
 import org.json.JSONObject
 import java.net.URI
 
@@ -23,57 +20,64 @@ object SocketManager {
     private lateinit var socket: Socket
 
     // ── Connection state ────────────────────────────────────────────────────
+    // replay = 1 so new collectors immediately get the current state
 
     private val _connected = MutableSharedFlow<Boolean>(replay = 1)
     val connected = _connected.asSharedFlow()
 
-    // ── Inbound event flows (one per server → client event) ─────────────────
+    // ── Inbound event flows ──────────────────────────────────────────────────
 
-    private val _roomJoined    = MutableSharedFlow<RoomJoinedPayload>(replay = 0)
-    private val _roomError     = MutableSharedFlow<String>(replay = 0)
-    private val _userJoined    = MutableSharedFlow<UserInfo>(replay = 0)
-    private val _userLeft      = MutableSharedFlow<UserInfo>(replay = 0)
-    private val _playbackPlay  = MutableSharedFlow<PlaybackEvent>(replay = 0)
-    private val _playbackPause = MutableSharedFlow<PlaybackEvent>(replay = 0)
-    private val _playbackSeek  = MutableSharedFlow<PlaybackEvent>(replay = 0)
-    private val _playbackRate  = MutableSharedFlow<PlaybackRatePayload>(replay = 0)
-    private val _syncState     = MutableSharedFlow<PlaybackState>(replay = 0)
-    private val _chatMessage   = MutableSharedFlow<ChatMessage>(replay = 0)
-    private val _settingsUpdate = MutableSharedFlow<RoomSettings>(replay = 0)
+    private val _roomJoined      = MutableSharedFlow<RoomJoinedPayload>(replay = 0)
+    private val _roomError       = MutableSharedFlow<String>(replay = 0)
+    private val _userJoined      = MutableSharedFlow<UserInfo>(replay = 0)
+    private val _userLeft        = MutableSharedFlow<UserInfo>(replay = 0)
+    private val _playbackPlay    = MutableSharedFlow<PlaybackEvent>(replay = 0)
+    private val _playbackPause   = MutableSharedFlow<PlaybackEvent>(replay = 0)
+    private val _playbackSeek    = MutableSharedFlow<PlaybackEvent>(replay = 0)
+    private val _playbackRate    = MutableSharedFlow<PlaybackRatePayload>(replay = 0)
+    private val _syncState       = MutableSharedFlow<PlaybackState>(replay = 0)
+    private val _chatMessage     = MutableSharedFlow<ChatMessage>(replay = 0)
+    private val _settingsUpdate  = MutableSharedFlow<RoomSettings>(replay = 0)
     private val _hostTransferred = MutableSharedFlow<HostTransferredPayload>(replay = 0)
-    private val _mediaReady    = MutableSharedFlow<MediaInfo>(replay = 0)
-    private val _ssOffer       = MutableSharedFlow<SdpPayload>(replay = 0)
-    private val _ssAnswer      = MutableSharedFlow<SdpAnswerPayload>(replay = 0)
-    private val _ssIce         = MutableSharedFlow<IceCandidatePayload>(replay = 0)
-    private val _ssStopped     = MutableSharedFlow<Unit>(replay = 0)
+    private val _mediaReady      = MutableSharedFlow<MediaInfo>(replay = 0)
+    private val _ssOffer         = MutableSharedFlow<SdpPayload>(replay = 0)
+    private val _ssAnswer        = MutableSharedFlow<SdpAnswerPayload>(replay = 0)
+    private val _ssIce           = MutableSharedFlow<IceCandidatePayload>(replay = 0)
+    private val _ssStopped       = MutableSharedFlow<Unit>(replay = 0)
 
-    val roomJoined     = _roomJoined.asSharedFlow()
-    val roomError      = _roomError.asSharedFlow()
-    val userJoined     = _userJoined.asSharedFlow()
-    val userLeft       = _userLeft.asSharedFlow()
-    val playbackPlay   = _playbackPlay.asSharedFlow()
-    val playbackPause  = _playbackPause.asSharedFlow()
-    val playbackSeek   = _playbackSeek.asSharedFlow()
-    val playbackRate   = _playbackRate.asSharedFlow()
-    val syncState      = _syncState.asSharedFlow()
-    val chatMessage    = _chatMessage.asSharedFlow()
-    val settingsUpdate = _settingsUpdate.asSharedFlow()
+    val roomJoined      = _roomJoined.asSharedFlow()
+    val roomError       = _roomError.asSharedFlow()
+    val userJoined      = _userJoined.asSharedFlow()
+    val userLeft        = _userLeft.asSharedFlow()
+    val playbackPlay    = _playbackPlay.asSharedFlow()
+    val playbackPause   = _playbackPause.asSharedFlow()
+    val playbackSeek    = _playbackSeek.asSharedFlow()
+    val playbackRate    = _playbackRate.asSharedFlow()
+    val syncState       = _syncState.asSharedFlow()
+    val chatMessage     = _chatMessage.asSharedFlow()
+    val settingsUpdate  = _settingsUpdate.asSharedFlow()
     val hostTransferred = _hostTransferred.asSharedFlow()
-    val mediaReady     = _mediaReady.asSharedFlow()
-    val ssOffer        = _ssOffer.asSharedFlow()
-    val ssAnswer       = _ssAnswer.asSharedFlow()
-    val ssIce          = _ssIce.asSharedFlow()
-    val ssStopped      = _ssStopped.asSharedFlow()
+    val mediaReady      = _mediaReady.asSharedFlow()
+    val ssOffer         = _ssOffer.asSharedFlow()
+    val ssAnswer        = _ssAnswer.asSharedFlow()
+    val ssIce           = _ssIce.asSharedFlow()
+    val ssStopped       = _ssStopped.asSharedFlow()
 
     // ── Init ────────────────────────────────────────────────────────────────
 
     fun init(context: Context) {
         val opts = IO.Options().apply {
-            transports = arrayOf("websocket")   // RULE: WebSocket only, no polling
+            // FIX 1: Allow polling first so Render's proxy can complete the
+            // HTTP handshake, then upgrade to WebSocket.
+            // "websocket"-only fails on Render because its load-balancer
+            // requires at least one polling request before the upgrade.
+            transports = arrayOf("polling", "websocket")
+
             reconnection = true
             reconnectionAttempts = Int.MAX_VALUE
             reconnectionDelay = 1000
             reconnectionDelayMax = 5000
+            timeout = 20000            // 20 s connect timeout (default is 20000 ms)
         }
 
         socket = IO.socket(URI.create(BuildConfig.SERVER_URL), opts)
@@ -83,7 +87,12 @@ object SocketManager {
     // ── Connection lifecycle ─────────────────────────────────────────────────
 
     fun connect() {
-        if (!socket.connected()) socket.connect()
+        if (!socket.connected()) {
+            Log.d(TAG, "connect() → connecting to ${BuildConfig.SERVER_URL}")
+            socket.connect()
+        } else {
+            Log.d(TAG, "connect() → already connected, skipping")
+        }
     }
 
     fun disconnect() {
@@ -92,7 +101,7 @@ object SocketManager {
 
     val isConnected: Boolean get() = socket.connected()
 
-    // ── Emit helpers (client → server) ──────────────────────────────────────
+    // ── Emit helpers ─────────────────────────────────────────────────────────
 
     fun joinRoom(payload: JoinRoomPayload) =
         emit("join_room", payload)
@@ -140,35 +149,37 @@ object SocketManager {
 
     private fun emit(event: String, payload: Any) {
         if (!socket.connected()) {
-            Log.w(TAG, "emit($event) called while disconnected — queued by Socket.IO")
+            Log.w(TAG, "emit($event) called while disconnected — Socket.IO will queue it")
         }
         val json = JSONObject(gson.toJson(payload))
+        Log.d(TAG, "emit → $event: $json")
         socket.emit(event, json)
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun registerListeners() {
 
         socket.on(Socket.EVENT_CONNECT) {
-            Log.d(TAG, "connected")
+            Log.d(TAG, "EVENT_CONNECT ✓  sid=${socket.id()}")
             _connected.tryEmit(true)
         }
 
-        socket.on(Socket.EVENT_DISCONNECT) {
-            Log.d(TAG, "disconnected")
+        socket.on(Socket.EVENT_DISCONNECT) { args ->
+            Log.d(TAG, "EVENT_DISCONNECT: ${args.firstOrNull()}")
             _connected.tryEmit(false)
         }
 
         socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
-            Log.e(TAG, "connect_error: ${args.firstOrNull()}")
+            Log.e(TAG, "EVENT_CONNECT_ERROR: ${args.firstOrNull()}")
             _connected.tryEmit(false)
         }
 
         socket.on("room_joined") { args ->
+            Log.d(TAG, "← room_joined")
             parse<RoomJoinedPayload>(args)?.let { _roomJoined.tryEmit(it) }
         }
 
         socket.on("room_error") { args ->
+            Log.e(TAG, "← room_error: ${args.firstOrNull()}")
             val json = args.firstOrNull() as? JSONObject ?: return@on
             _roomError.tryEmit(json.optString("message", "Unknown error"))
         }
@@ -197,7 +208,7 @@ object SocketManager {
             val json = args.firstOrNull() as? JSONObject ?: return@on
             _playbackRate.tryEmit(
                 PlaybackRatePayload(
-                    roomId = "",            // not included in server broadcast
+                    roomId = "",
                     rate = json.optDouble("rate", 1.0).toFloat()
                 )
             )
@@ -205,7 +216,7 @@ object SocketManager {
 
         socket.on("sync_state") { args ->
             val json = args.firstOrNull() as? JSONObject ?: return@on
-            val pb = json.optJSONObject("playback") ?: return@on
+            val pb = json.optJSONObject("playback") ?: json   // server may send flat or nested
             _syncState.tryEmit(
                 PlaybackState(
                     timestamp = pb.optDouble("timestamp", 0.0),
@@ -222,8 +233,14 @@ object SocketManager {
 
         socket.on("settings_update") { args ->
             val json = args.firstOrNull() as? JSONObject ?: return@on
-            val s = json.optJSONObject("settings") ?: return@on
-            parse<RoomSettings>(s.toString().wrapInArgs())?.let { _settingsUpdate.tryEmit(it) }
+            // Server may send { settings: {...} } or the object directly
+            val s = json.optJSONObject("settings") ?: json
+            try {
+                gson.fromJson(s.toString(), RoomSettings::class.java)
+                    ?.let { _settingsUpdate.tryEmit(it) }
+            } catch (e: Exception) {
+                Log.e(TAG, "settings_update parse error: ${e.message}")
+            }
         }
 
         socket.on("host_transferred") { args ->
@@ -270,12 +287,9 @@ object SocketManager {
             triggeredBy = by
         )
     }
-
-    /** Wraps a raw JSON string in a single-element array so parse<T> can read it. */
-    private fun String.wrapInArgs(): Array<Any> = arrayOf(JSONObject(this))
 }
 
-// ── Extra payload types only used by SocketManager ──────────────────────────
+// ── Payload types ─────────────────────────────────────────────────────────────
 
 data class HostTransferredPayload(
     val newHostId: String,
