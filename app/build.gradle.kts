@@ -99,5 +99,5 @@ dependencies {
     implementation("androidx.media3:media3-common:1.4.1")
 
     // WebRTC
-    implementation("org.webrtc:google-webrtc:1.0.30039")
+    implementation("com.infobip:google-webrtc:1.0.45036")
 }
