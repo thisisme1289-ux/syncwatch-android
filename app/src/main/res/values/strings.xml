@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SyncWatch</string>
+
+    <!-- Home -->
+    <string name="create_room">Create room</string>
+    <string name="join_room">Join room</string>
+    <string name="nickname_hint">Your nickname</string>
+    <string name="password_optional">Room password (optional)</string>
+    <string name="room_code_hint">Room code</string>
+    <string name="mode_local">Local sync — near-zero data</string>
+    <string name="mode_upload">Upload — host uploads, guests stream</string>
+    <string name="mode_screenshare">Screen share — WebRTC</string>
+
+    <!-- Watch -->
+    <string name="open_file">Open video file</string>
+    <string name="upload_video">Upload video</string>
+    <string name="share_screen">Share screen</string>
+    <string name="stop_sharing">Stop sharing</string>
+    <string name="sync_all">Sync all</string>
+    <string name="leave">Leave</string>
+    <string name="send">Send</string>
+    <string name="message_hint">Message…</string>
+    <string name="tab_users">Users</string>
+    <string name="tab_chat">Chat</string>
+
+    <!-- Screen share notification -->
+    <string name="screen_share_notification_title">SyncWatch</string>
+    <string name="screen_share_notification_text">Screen sharing is active</string>
+    <string name="screen_share_stop_action">Stop</string>
+
+    <!-- Errors -->
+    <string name="error_nickname_empty">Nickname cannot be empty</string>
+    <string name="error_code_empty">Room code cannot be empty</string>
+    <string name="error_room_not_found">Room not found. Check the code and try again.</string>
+    <string name="error_network">Network error. Check your connection.</string>
+    <string name="error_upload_failed">Upload failed</string>
+    <string name="error_screen_capture_denied">Screen capture permission denied</string>
+</resources>
