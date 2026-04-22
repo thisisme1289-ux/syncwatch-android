@@ -1,0 +1,97 @@
+package com.syncwatch.model
+
+import com.google.gson.annotations.SerializedName
+
+// ── REST responses ──────────────────────────────────────────────────────────
+
+data class CreateRoomRequest(
+    val nickname: String,
+    val password: String? = null,
+    val mode: String = "local"          // "local" | "upload" | "screenshare"
+)
+
+data class CreateRoomResponse(
+    val roomId: String,
+    val code: String,
+    val hostToken: String
+)
+
+data class RoomLookupResponse(
+    val roomId: String,
+    val code: String,
+    val mode: String,
+    val hasPassword: Boolean
+)
+
+// ── Socket payloads received from server ────────────────────────────────────
+
+data class RoomJoinedPayload(
+    val roomId: String,
+    val code: String,
+    val mode: String,
+    val settings: RoomSettings,
+    val playback: PlaybackState,
+    val media: MediaInfo?,
+    val users: List<UserInfo>,
+    val chat: List<ChatMessage>,
+    val isHost: Boolean,
+    val mySocketId: String
+)
+
+data class RoomSettings(
+    val locked: Boolean = false,
+    val maxGuests: Int = 10,
+    val allowChat: Boolean = true,
+    val syncThreshold: Double = 2.0     // seconds before a force-sync fires
+)
+
+data class MediaInfo(
+    val url: String?,
+    val filename: String?
+)
+
+data class UserInfo(
+    val socketId: String,
+    val nickname: String,
+    val isHost: Boolean
+)
+
+data class ChatMessage(
+    val nickname: String,
+    val text: String,
+    val ts: Long                         // unix ms from server
+)
+
+// ── Socket payloads emitted by app ──────────────────────────────────────────
+
+data class JoinRoomPayload(
+    val roomId: String,
+    val nickname: String,
+    val password: String? = null,
+    val hostToken: String? = null
+)
+
+data class PlaybackEventPayload(
+    val roomId: String,
+    val timestamp: Double               // seconds
+)
+
+data class PlaybackRatePayload(
+    val roomId: String,
+    val rate: Float
+)
+
+data class ChatMessagePayload(
+    val roomId: String,
+    val text: String
+)
+
+data class SettingsUpdatePayload(
+    val roomId: String,
+    val settings: RoomSettings
+)
+
+data class TransferHostPayload(
+    val roomId: String,
+    val targetSocketId: String
+)
