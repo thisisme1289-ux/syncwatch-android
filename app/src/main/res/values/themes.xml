@@ -16,10 +16,4 @@
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
-    <!-- Tab text selector: selected = primary, unselected = on_surface_variant -->
-    <selector name="selector_tab_text">
-        <item android:color="@color/primary" android:state_selected="true" />
-        <item android:color="@color/on_surface_variant" />
-    </selector>
-
 </resources>
