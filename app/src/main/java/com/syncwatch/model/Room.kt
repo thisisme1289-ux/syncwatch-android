@@ -13,25 +13,29 @@ data class CreateRoomRequest(
 
 data class CreateRoomResponse(
     val roomId: String,
-    // Server returns "roomCode", not "code"
+    // server/index.js returns "roomCode" in POST /api/rooms response
     @SerializedName("roomCode") val code: String,
     val hostToken: String
 )
 
 data class RoomLookupResponse(
     val roomId: String,
-    // Server may return "roomCode" or "code" — handle both
-    @SerializedName(value = "roomCode", alternate = ["code"]) val code: String,
+    // server/index.js returns "code" in GET /api/rooms/:id response
+    val code: String,
     val mode: String,
     val hasPassword: Boolean
 )
 
-// ── Socket payloads — received from server ─────────────────────────────────────
-// Must implement Serializable: these classes are passed through a Bundle.
+// ── Socket payloads received from server ───────────────────────────────────────
+//
+// server/socket.js room_joined payload (verified from source):
+//   { roomId, code, mode, settings, playback, media, users, chat, isHost, mySocketId }
+//
+// All classes passed through a Bundle must implement Serializable.
 
 data class RoomJoinedPayload(
     val roomId: String,
-    val code: String,         // server sends "code" (short join code) on room_joined
+    val code: String,
     val mode: String,
     val settings: RoomSettings,
     val playback: PlaybackState,
@@ -42,6 +46,10 @@ data class RoomJoinedPayload(
     val mySocketId: String
 ) : Serializable
 
+// Server settings keys (from socket.js settings_update handler):
+//   hostOnlyControl, voiceEnabled, videoEnabled, chatEnabled, dataSaver, defaultQuality
+// Android uses different names internally — Gson will silently apply defaults.
+// TODO: align these field names in a follow-up session.
 data class RoomSettings(
     val locked: Boolean = false,
     val maxGuests: Int = 10,
@@ -66,7 +74,7 @@ data class ChatMessage(
     val ts: Long
 ) : Serializable
 
-// ── Socket payloads — emitted by app ──────────────────────────────────────────
+// ── Socket payloads emitted by app ────────────────────────────────────────────
 
 data class JoinRoomPayload(
     val roomId: String,
