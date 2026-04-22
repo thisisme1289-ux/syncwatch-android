@@ -25,7 +25,7 @@ android {
         buildConfigField(
             "String",
             "SERVER_URL",
-            "\"${localProps.getProperty("SERVER_URL", "http://10.0.2.2:3000")}\""
+            "\"${localProps.getProperty("SERVER_URL", "https://syncwatch-mtib.onrender.com")}\""
         )
     }
 
