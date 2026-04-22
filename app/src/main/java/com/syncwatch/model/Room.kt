@@ -3,36 +3,35 @@ package com.syncwatch.model
 import com.google.gson.annotations.SerializedName
 import java.io.Serializable
 
-// ── REST responses ──────────────────────────────────────────────────────────
+// ── REST responses ─────────────────────────────────────────────────────────────
 
 data class CreateRoomRequest(
     val nickname: String,
     val password: String? = null,
-    val mode: String = "local"          // "local" | "upload" | "screenshare"
+    val mode: String = "local"
 )
 
 data class CreateRoomResponse(
     val roomId: String,
-    // FIX: server returns "roomCode", not "code"
+    // Server returns "roomCode", not "code"
     @SerializedName("roomCode") val code: String,
     val hostToken: String
 )
 
 data class RoomLookupResponse(
     val roomId: String,
-    // FIX: server may return "roomCode" here too
-    @SerializedName("roomCode", alternate = ["code"]) val code: String,
+    // Server may return "roomCode" or "code" — handle both
+    @SerializedName(value = "roomCode", alternate = ["code"]) val code: String,
     val mode: String,
     val hasPassword: Boolean
 )
 
-// ── Socket payloads received from server ─────────────────────────────────────
-// All classes that travel through a Bundle must implement Serializable.
+// ── Socket payloads — received from server ─────────────────────────────────────
+// Must implement Serializable: these classes are passed through a Bundle.
 
 data class RoomJoinedPayload(
     val roomId: String,
-    // Server sends "code" on room_joined (short join code)
-    val code: String,
+    val code: String,         // server sends "code" (short join code) on room_joined
     val mode: String,
     val settings: RoomSettings,
     val playback: PlaybackState,
@@ -67,7 +66,7 @@ data class ChatMessage(
     val ts: Long
 ) : Serializable
 
-// ── Socket payloads emitted by app ───────────────────────────────────────────
+// ── Socket payloads — emitted by app ──────────────────────────────────────────
 
 data class JoinRoomPayload(
     val roomId: String,
