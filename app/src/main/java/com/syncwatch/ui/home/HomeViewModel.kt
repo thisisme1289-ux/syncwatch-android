@@ -29,17 +29,19 @@ class HomeViewModel : ViewModel() {
     private val _navigateToWatch = MutableSharedFlow<RoomJoinedPayload>(extraBufferCapacity = 1)
     val navigateToWatch: SharedFlow<RoomJoinedPayload> = _navigateToWatch.asSharedFlow()
 
-    /** hostToken stays in memory, never written to disk. */
+    /** hostToken stays in memory only — never written to disk. */
     var pendingHostToken: String? = null
         private set
 
     private var activeJob: Job? = null
 
-    // ── Create room ───────────────────────────────────────────────────────
+    // ── Create Room ───────────────────────────────────────────────────────────
 
     fun createRoom(nickname: String, password: String?, mode: String) {
-        if (nickname.isBlank()) { _uiState.value = HomeUiState.Error("Nickname cannot be empty"); return }
-
+        if (nickname.isBlank()) {
+            _uiState.value = HomeUiState.Error("Nickname cannot be empty")
+            return
+        }
         activeJob?.cancel()
         activeJob = viewModelScope.launch {
             _uiState.value = HomeUiState.Loading
@@ -77,7 +79,7 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    // ── Join room ─────────────────────────────────────────────────────────
+    // ── Join Room ─────────────────────────────────────────────────────────────
 
     fun joinRoom(code: String, nickname: String, password: String?) {
         if (nickname.isBlank()) { _uiState.value = HomeUiState.Error("Nickname cannot be empty"); return }
@@ -95,7 +97,7 @@ class HomeViewModel : ViewModel() {
             }
 
             when (lookupResponse.code()) {
-                404  -> { _uiState.value = HomeUiState.Error("Room not found. Check the code."); return@launch }
+                404          -> { _uiState.value = HomeUiState.Error("Room not found. Check the code."); return@launch }
                 !in 200..299 -> { _uiState.value = HomeUiState.Error("Server error (${lookupResponse.code()})"); return@launch }
             }
 
@@ -117,17 +119,21 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    // ── Core flow: connect socket → emit join_room → wait for room_joined ──
+    // ── Core connect → join flow ───────────────────────────────────────────────
     //
-    //  IMPORTANT ORDER:
-    //  1. Register room_joined / room_error collectors FIRST.
-    //     (MutableSharedFlow replay=0 means events emitted before a collector
-    //      starts are silently lost. The server responds very fast after
-    //      join_room; we cannot risk missing the event.)
-    //  2. Call SocketManager.connect()
-    //  3. Wait for EVENT_CONNECT (connected.filter{it}.first())
-    //  4. Emit join_room
-    //  5. The pre-registered collectors will receive room_joined / room_error.
+    // Correct order:
+    //   1. connect()
+    //   2. Wait for EVENT_CONNECT  (up to 60 s — Render cold-start can take 50 s)
+    //   3. Start room_joined + room_error collectors   ← AFTER connect, BEFORE emit
+    //      (MutableSharedFlow replay=0: events emitted before a collector subscribes
+    //       are silently dropped. We must subscribe before emitting join_room.)
+    //   4. Emit join_room
+    //   5. Wait for whichever collector fires first (up to 15 s)
+    //
+    // WHY NOT start collectors before connect():
+    //   The 15 s result timeout would include the cold-start wait, so it could
+    //   expire before room_joined arrives. Starting collectors after connection
+    //   gives them the full 15 s for the actual join exchange.
 
     private suspend fun connectAndJoin(
         roomId:    String,
@@ -135,14 +141,30 @@ class HomeViewModel : ViewModel() {
         password:  String?,
         hostToken: String? = null
     ) {
-        // Step 1 — start result collectors BEFORE connecting
-        // Using separate child Jobs so we can cancel the loser once one fires.
+        // Step 1 — connect
+        SocketManager.connect()
+
+        // Step 2 — wait for EVENT_CONNECT
+        val connected = runCatching {
+            withTimeout(60_000L) {
+                SocketManager.connected.filter { it }.first()
+            }
+        }.isSuccess
+
+        if (!connected) {
+            _uiState.value = HomeUiState.Error(
+                "Could not connect to server.\n" +
+                "The server may be starting up — wait 30 s and try again."
+            )
+            return
+        }
+
+        // Step 3 — register result collectors (BEFORE emitting join_room)
         var resolved = false
 
         val joinedJob = viewModelScope.launch {
             val payload = runCatching {
-                // Wait up to 30 s for room_joined after connection is established
-                withTimeout(30_000L) { SocketManager.roomJoined.first() }
+                withTimeout(15_000L) { SocketManager.roomJoined.first() }
             }.getOrElse { return@launch }
 
             if (!resolved) {
@@ -154,7 +176,7 @@ class HomeViewModel : ViewModel() {
 
         val errorJob = viewModelScope.launch {
             val message = runCatching {
-                withTimeout(30_000L) { SocketManager.roomError.first() }
+                withTimeout(15_000L) { SocketManager.roomError.first() }
             }.getOrElse { return@launch }
 
             if (!resolved) {
@@ -164,30 +186,7 @@ class HomeViewModel : ViewModel() {
             }
         }
 
-        // Step 2 — connect socket
-        SocketManager.connect()
-
-        // Step 3 — wait for EVENT_CONNECT
-        //  Render free tier can take 30-60 s to wake from sleep → use 60 s timeout.
-        val didConnect = runCatching {
-            withTimeout(60_000L) {
-                SocketManager.connected.filter { it }.first()
-            }
-        }.isSuccess
-
-        if (!didConnect) {
-            resolved = true
-            joinedJob.cancel()
-            errorJob.cancel()
-            _uiState.value = HomeUiState.Error(
-                "Could not reach the server.\n" +
-                "• Check your internet connection.\n" +
-                "• The server may be waking up — wait 30 s and try again."
-            )
-            return
-        }
-
-        // Step 4 — send join_room (collectors from Step 1 are already listening)
+        // Step 4 — emit join_room now that collectors are live
         SocketManager.joinRoom(
             JoinRoomPayload(
                 roomId    = roomId,
@@ -197,13 +196,15 @@ class HomeViewModel : ViewModel() {
             )
         )
 
-        // Step 5 — wait for joinedJob to complete (errorJob races it)
+        // Step 5 — wait for outcome
         joinedJob.join()
         errorJob.cancel()
 
-        // If neither collector fired within timeout, give a clear error
         if (!resolved) {
-            _uiState.value = HomeUiState.Error("Server connected but did not respond to join request.")
+            _uiState.value = HomeUiState.Error(
+                "Server connected but did not respond to join request.\n" +
+                "Check that the room still exists and try again."
+            )
         }
     }
 
@@ -213,7 +214,7 @@ class HomeViewModel : ViewModel() {
     }
 }
 
-// ── UI states ─────────────────────────────────────────────────────────────────
+// ── UI state ──────────────────────────────────────────────────────────────────
 
 sealed class HomeUiState {
     object Idle : HomeUiState()
